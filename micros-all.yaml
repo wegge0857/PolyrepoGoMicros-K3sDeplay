@@ -1,0 +1,153 @@
+# --- 0. etf 微服务 ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: etf-micros
+spec:
+  replicas: 1 #micros 进程因为内存溢出（OOM）或者服务器抖动挂掉了，K8s 的控制平面发现“当前运行数量（0）”不等于“期望数量（1）”，它会立即自动重启一个新的 Pod。
+  selector:
+    matchLabels:
+      app: etf-micros
+  template:
+    metadata:
+      labels:
+        app: etf-micros
+    spec:
+      containers:
+      - name: etf-micros
+        image: docker.io/library/etf-micros:v0.0.1
+        imagePullPolicy: Never    # 关键：告诉 K3s 只用本地镜像，别去网上拉
+        ports:
+        - containerPort: 8601
+        - containerPort: 9601
+        # --- 第一步：定义容器内的挂载位置 ---
+        volumeMounts:
+        - name: etf-config-path          # 名字必须与下方的 volumes 名字一致
+          mountPath: /app/configs        # 程序读取配置的目录
+      
+      # --- 第二步：定义存储来源 ---
+      volumes:
+      - name: etf-config-path
+        configMap:
+          name: etf-config               # 这是你创建的 ConfigMap 的名字
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: etf-service
+spec:
+  selector:
+    app: etf-micros
+  ports:
+    - name: http
+      port: 8601
+      targetPort: 8601
+    - name: grpc
+      port: 9601
+      targetPort: 9601
+
+---
+# --- 1. User 微服务 ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: user-micros
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: user-micros
+  template:
+    metadata:
+      labels:
+        app: user-micros
+    spec:
+      containers:
+      - name: user-micros
+        image: docker.io/library/user-micros:v0.0.1 # 这里换成你 user-micros 的镜像名
+        imagePullPolicy: Never    # 关键：告诉 K3s 只用本地镜像，别去网上拉
+        ports:
+        - containerPort: 8602
+        - containerPort: 9602
+        # --- 第一步：定义容器内的挂载位置 ---
+        volumeMounts:
+        - name: user-config-path          # 名字必须与下方的 volumes 名字一致
+          mountPath: /app/configs        # 程序读取配置的目录
+      
+      # --- 第二步：定义存储来源 ---
+      volumes:
+      - name: user-config-path
+        configMap:
+          name: user-config               # 这是你创建的 ConfigMap 的名字
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: user-service # BFF 将通过 http://user-service:8000 访问它
+spec:
+  selector:
+    app: user-micros
+  ports:
+    - name: http
+      port: 8602
+      targetPort: 8602
+    - name: grpc
+      port: 9602
+      targetPort: 9602
+
+---
+# --- 2. BFF 微服务 ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bff-micros
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bff-micros
+  template:
+    metadata:
+      labels:
+        app: bff-micros
+    spec:
+      containers:
+      - name: bff-micros
+        image: docker.io/library/bff-micros:v0.0.1 # 使用你刚刚导入成功的镜像
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 8603
+        - containerPort: 9603
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bff-service
+spec:
+  type: NodePort         # <--- 在宿主机上开一个真实的端口，把流量转交给集群，也就是下面的30000
+  selector:
+    app: bff-micros
+  ports:
+    - name: http
+      port: 8603
+      targetPort: 8603
+      nodePort: 30000  # 对外的端口 服务器ip+这个端口访问，NodePort 默认只允许使用 30000-32767 之间的端口
+#---
+# --- 3. 网关入口 (Ingress 这个只允许80 443，暂时忽略) ---
+# 这会让你的服务器 80 端口直接映射到 BFF 的接口
+# apiVersion: networking.k8s.io/v1
+# kind: Ingress
+# metadata:
+#   name: bff-ingress
+# spec:
+#   ingressClassName: traefik  # 明确告诉 K3s 使用 Traefik
+#   rules:
+#   - http:
+#       paths:
+#       - path: /
+#         pathType: Prefix
+#         backend:
+#           service:
+#             name: bff-service
+#             port:
+#               number: 8603
