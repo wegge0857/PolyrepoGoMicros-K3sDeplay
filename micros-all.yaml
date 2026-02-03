@@ -15,7 +15,7 @@ spec:
     spec:
       containers:
       - name: etf-micros
-        image: docker.io/library/etf-micros:v0.0.1
+        image: docker.io/library/etf-micros:v0.0.2
         imagePullPolicy: Never    # 关键：告诉 K3s 只用本地镜像，别去网上拉
         ports:
         - containerPort: 8601
@@ -24,7 +24,7 @@ spec:
         volumeMounts:
         - name: etf-config-path          # 名字必须与下方的 volumes 名字一致
           mountPath: /app/configs        # 程序读取配置的目录
-      
+
       # --- 第二步：定义存储来源 ---
       volumes:
       - name: etf-config-path
@@ -64,7 +64,7 @@ spec:
     spec:
       containers:
       - name: user-micros
-        image: docker.io/library/user-micros:v0.0.1 # 这里换成你 user-micros 的镜像名
+        image: docker.io/library/user-micros:v0.0.2 # 这里换成你 user-micros 的镜像名
         imagePullPolicy: Never    # 关键：告诉 K3s 只用本地镜像，别去网上拉
         ports:
         - containerPort: 8602
@@ -73,7 +73,7 @@ spec:
         volumeMounts:
         - name: user-config-path          # 名字必须与下方的 volumes 名字一致
           mountPath: /app/configs        # 程序读取配置的目录
-      
+
       # --- 第二步：定义存储来源 ---
       volumes:
       - name: user-config-path
@@ -113,11 +113,21 @@ spec:
     spec:
       containers:
       - name: bff-micros
-        image: docker.io/library/bff-micros:v0.0.1 # 使用你刚刚导入成功的镜像
+        image: docker.io/library/bff-micros:v0.0.2 # 使用你刚刚导入成功的镜像
         imagePullPolicy: Never
         ports:
         - containerPort: 8603
         - containerPort: 9603
+        # --- 第一步：定义容器内的挂载位置 ---
+        volumeMounts:
+        - name: bff-config-path          # 名字必须与下方的 volumes 名字一致
+          mountPath: /app/configs        # 程序读取配置的目录
+
+      # --- 第二步：定义存储来源 ---
+      volumes:
+      - name: bff-config-path
+        configMap:
+          name: bff-config               # 这是你创建的 ConfigMap 的名字
 ---
 apiVersion: v1
 kind: Service
@@ -151,3 +161,48 @@ spec:
 #             name: bff-service
 #             port:
 #               number: 8603
+---
+# --- 4. DTM 微服务 ---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dtm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dtm
+  template:
+    metadata:
+      labels:
+        app: dtm
+    spec:
+      containers:
+      - name: dtm
+        image: yedf/dtm:latest # 或者你私有仓库的镜像
+        imagePullPolicy: IfNotPresent  # 强制优先使用本地刚导入的镜像 没成功需要手动导入，在开启这个
+        ports:
+        - containerPort: 36790
+        - containerPort: 36789
+        env:
+        - name: DTM_DB_DRIVER
+          value: "mysql"
+        - name: DTM_DB_SOURCE
+          value: "root:123123@tcp(10.42.0.1:3306)/dtm?parseTime=True" # 指向你现有的 MySQL
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dtm-service
+spec:
+  selector:
+    app: dtm
+  ports:
+    - name: grpc
+      protocol: TCP
+      port: 36790      # 集群内访问端口
+      targetPort: 36790 # 容器内监听端口
+    - name: http
+      protocol: TCP
+      port: 36789
+      targetPort: 36789
